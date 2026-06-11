@@ -39,13 +39,19 @@ setup_highlights()
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'copilot-chat',
   group = group,
-  callback = vim.schedule_wrap(function()
-    vim.cmd.syntax('match CopilotChatResource "#\\S\\+"')
-    vim.cmd.syntax('match CopilotChatTool "@\\S\\+"')
-    vim.cmd.syntax('match CopilotChatPrompt "/\\S\\+"')
-    vim.cmd.syntax('match CopilotChatModel "\\$\\S\\+"')
-    vim.cmd.syntax('match CopilotChatUri "##\\S\\+"')
-  end),
+  callback = function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    vim.schedule(function()
+      -- nvim_get_option_value workaround
+      if bufnr ~= vim.api.nvim_get_current_buf() then return end
+
+      vim.cmd.syntax('match CopilotChatResource "#\\S\\+"')
+      vim.cmd.syntax('match CopilotChatTool "@\\S\\+"')
+      vim.cmd.syntax('match CopilotChatPrompt "/\\S\\+"')
+      vim.cmd.syntax('match CopilotChatModel "\\$\\S\\+"')
+      vim.cmd.syntax('match CopilotChatUri "##\\S\\+"')
+    end)
+  end,
 })
 
 -- Setup commands
