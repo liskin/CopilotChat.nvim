@@ -52,6 +52,7 @@
 ---@field streaming boolean?
 ---@field tools boolean?
 ---@field reasoning boolean?
+---@field picker boolean?
 
 local log = require('plenary.log')
 local constants = require('CopilotChat.constants')
@@ -319,14 +320,43 @@ function Client:ask(opts)
     error('Provider not found: ' .. provider_name)
   end
 
+  -- On restricted accounts the selected model may have model_picker_enabled=false,
+  -- meaning it cannot be called directly. Fall back to a picker-enabled model
+  -- from the same provider; if none exist, fall back to auto mode (which obtains
+  -- a session token via /models/session).
+  if model_config.picker == false and opts.model ~= 'auto' then
+    local fallback = nil
+    for id, cfg in pairs(models) do
+      if cfg.provider == provider_name and cfg.picker ~= false and id ~= 'auto' and not id:match('^auto:') then
+        fallback = id
+        break
+      end
+    end
+
+    if fallback then
+      log.warn('Model ' .. opts.model .. ' is not directly usable on this account, falling back to ' .. fallback)
+      opts.model = fallback
+      model_config = models[fallback]
+    else
+      local auto_config = models['auto'] or models['auto:' .. provider_name]
+      if auto_config then
+        log.warn('Model ' .. opts.model .. ' is not directly usable on this account, falling back to auto')
+        opts.model = 'auto'
+        model_config = auto_config
+      end
+    end
+  end
+
+  local resolve_headers = nil
   if provider.resolve_model then
     local headers = self:authenticate(provider_name)
-    local resolved_model = provider.resolve_model(headers, opts.model)
+    local resolved_model, model_headers = provider.resolve_model(headers, opts.model)
     opts.model = resolved_model
-    model_config = models[opts.model]
-    if not model_config then
-      error('Resolved model not found: ' .. opts.model)
-    end
+    resolve_headers = model_headers
+    -- Resolved auto models may be absent from the picker UI but still present
+    -- in the models cache (picker=false). Prefer full metadata for the resolved
+    -- id; fall back to the originally selected config only if missing.
+    model_config = models[opts.model] or models[opts.model .. ':' .. provider_name] or model_config
   end
 
   local options = {
@@ -536,11 +566,17 @@ function Client:ask(opts)
     self.current_job = job_id
   end
 
-  local headers = self:authenticate(provider_name)
+  -- Clone auth headers so per-request headers (e.g. session token) do not leak
+  -- into the provider cache. Strip the internal base-url routing header.
+  local headers = vim.tbl_extend('force', {}, self:authenticate(provider_name))
+  headers['x-copilot-base-url'] = nil
 
   local request, extra_headers =
     provider.prepare_input(generate_ask_request(opts.system_prompt, history, generated_messages), options)
 
+  if resolve_headers then
+    headers = vim.tbl_extend('force', headers, resolve_headers)
+  end
   if extra_headers then
     headers = vim.tbl_extend('force', headers, extra_headers)
   end

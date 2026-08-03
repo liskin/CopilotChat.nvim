@@ -530,7 +530,7 @@ end
 ---@field get_headers nil|fun():table<string, string>,number?
 ---@field get_info nil|fun(headers:table):string[]
 ---@field get_models nil|fun(headers:table):table<CopilotChat.client.Model>
----@field resolve_model nil|fun(headers:table, model: string):string
+---@field resolve_model nil|fun(headers:table, model: string):string,table?
 ---@field prepare_input nil|fun(inputs:CopilotChat.client.Message[], opts:CopilotChat.config.providers.Options):table,table?
 ---@field prepare_output nil|fun(output:table, opts:CopilotChat.config.providers.Options):CopilotChat.config.providers.Output
 ---@field get_url nil|fun(opts:CopilotChat.config.providers.Options):string
@@ -635,14 +635,14 @@ M.copilot = {
       error(err)
     end
 
+    local chat_models = vim.tbl_filter(function(model)
+      return model.capabilities and model.capabilities.type == 'chat'
+    end, response.body.data)
+
     local models = vim
-      .iter(response.body.data)
-      :filter(function(model)
-        return model.capabilities.type == 'chat' and model.model_picker_enabled
-      end)
+      .iter(chat_models)
       :map(function(model)
         local supported_endpoints = model.supported_endpoints or {}
-        -- Pre-compute whether this model uses the Responses API
         local use_responses = vim.tbl_contains(supported_endpoints, '/responses')
 
         return {
@@ -657,8 +657,7 @@ M.copilot = {
           version = model.version,
           multiplier = model.billing and model.billing.multiplier or nil,
           use_responses = use_responses,
-          -- Carry the base URL into the model so get_url and resolve_model
-          -- can use it without needing access to the headers again.
+          picker = not not model.model_picker_enabled,
           base_url = base_url,
         }
       end)
@@ -711,10 +710,21 @@ M.copilot = {
     })
 
     if err then
-      error(err)
+      local status = response and response.status or 'unknown'
+      local body = response and response.body or err
+      error('Failed to resolve auto model (' .. tostring(status) .. '): ' .. tostring(body))
     end
 
-    return response.body.selected_model
+    if not response or not response.body or not response.body.selected_model then
+      error('Auto model resolution returned no selected_model')
+    end
+
+    local response_headers = nil
+    if response.body.session_token then
+      response_headers = { ['Copilot-Session-Token'] = response.body.session_token }
+    end
+
+    return response.body.selected_model, response_headers
   end,
 
   prepare_input = function(inputs, opts)
